@@ -71,13 +71,14 @@
 #include "device.h"
 
 #include "she_pwm_coefficients.h"
+#include "SFO_V8.h"
 
 //
 // Defines
 //
 #define EPWM_TIMER_TBPRD 2500
-#define TRANSFER    (4*ANGLES)
-#define BURST       4              // 4 words per transfer
+#define TRANSFER    (2*ANGLES)
+#define BURST       6              // 4 words per transfer
 #define PI          3.14159265
 
 //
@@ -85,29 +86,23 @@
 //
 
 uint16_t compareConfigs[TRANSFER*BURST] = {
-//  CMPAHR  ,   CMPA   ,   CMPBHR  ,   CMPB ,
-    1 << 8  ,  1001U   ,   5 << 8  ,   1000U,
-    2 << 8  ,  2001U   ,   6 << 8  ,   2000U,
-    3 << 8  ,  3001U   ,   7 << 8  ,   3000U,
-    4 << 8  ,  4001U   ,   8 << 8  ,   4000U,
-    5 << 8  ,  5001U   ,   9 << 8  ,   5000U,
-    1 << 8  ,  1001U   ,   5 << 8  ,   1000U,
-    2 << 8  ,  2001U   ,   6 << 8  ,   2000U,
-    3 << 8  ,  3001U   ,   7 << 8  ,   3000U,
-    4 << 8  ,  4001U   ,   8 << 8  ,   4000U,
-    5 << 8  ,  5001U   ,   9 << 8  ,   5000U,
-    1 << 8  ,  1001U   ,   5 << 8  ,   1000U,
-    2 << 8  ,  2001U   ,   6 << 8  ,   2000U,
-    3 << 8  ,  3001U   ,   7 << 8  ,   3000U,
-    4 << 8  ,  4001U   ,   8 << 8  ,   4000U,
-    5 << 8  ,  5001U   ,   9 << 8  ,   5000U,
-    1 << 8  ,  1001U   ,   5 << 8  ,   1000U,
-    2 << 8  ,  2001U   ,   6 << 8  ,   2000U,
-    3 << 8  ,  3001U   ,   7 << 8  ,   3000U,
-    4 << 8  ,  4001U   ,   8 << 8  ,   4000U,
-    5 << 8  ,  5001U   ,   9 << 8  ,   5000U,
+//  TBPRDHR ,  TBRPRD  ,  CMPAHR  ,  CMPA    ,  CMPBHR  ,  CMPB   ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
+    0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff  ,  0xffff ,
 };
 
+
+uint16_t status;
+int MEP_ScaleFactor;
+volatile uint32_t ePWM[3] = {0, EPWM1_BASE, EPWM2_BASE};
 
 // Place buffers in GSRAM
 #pragma DATA_SECTION(compareConfigs,    "ramgs0");
@@ -148,6 +143,11 @@ void main(void)
     //
     Interrupt_initVectorTable();
 
+    while(status == SFO_INCOMPLETE)
+    {
+        status = SFO();
+    }
+
     //
     // Assign the interrupt service routines to ePWM interrupts
     //
@@ -185,57 +185,74 @@ void main(void)
     initDMA();
     initEPWM(EPWM1_BASE);
 
-    //
-    // Enable sync and clock to PWM
-    //
-    SysCtl_enablePeripheral(SYSCTL_PERIPH_CLK_TBCLKSYNC);
+
+    float frequency = 40000;
+    int ampIdx = 99;
+
+    float fundamentalAngularPeriod = 50e6 / (2 * PI * frequency);
+
+    const float* selected = phaseAngles[ampIdx];
+
+    int i;
+    for (i = 0; i < ANGLES; i ++) {
+        float angle = selected[i*2] * fundamentalAngularPeriod;
+        uint16_t angleInt = (uint16_t) angle;
+
+        float period = selected[i*2 + 1] * fundamentalAngularPeriod;
+        uint16_t periodInt = (uint16_t) period;
+
+        compareConfigs[i*BURST + 1] = periodInt;
+        compareConfigs[i*BURST + 3] = angleInt;
+        compareConfigs[(i + ANGLES)*BURST + 1] = periodInt;
+        compareConfigs[(i + ANGLES)*BURST + 5] = angleInt;
+
+        angle = (angle - angleInt)*65536;
+        angleInt = (uint16_t) angle;
+
+        period = (period - periodInt)*65536;
+        periodInt = (uint16_t) period;
+
+        compareConfigs[i*BURST + 0] = periodInt;
+        compareConfigs[i*BURST + 2] = angleInt;
+        compareConfigs[(i + ANGLES)*BURST + 0] = periodInt;
+        compareConfigs[(i + ANGLES)*BURST + 4] = angleInt;
+
+    }
+
+   //
+   // Enable sync and clock to PWM
+   //
+   SysCtl_enablePeripheral(SYSCTL_PERIPH_CLK_TBCLKSYNC);
 
 
-    // Enable ePWM interrupts
-    //
-    Interrupt_enable(INT_EPWM1);
-    Interrupt_enable(INT_DMA_CH5);
+   // Enable ePWM interrupts
+   //
+   Interrupt_enable(INT_EPWM1);
+   Interrupt_enable(INT_DMA_CH5);
 
-    //
-    // Enable Global Interrupt (INTM) and realtime interrupt (DBGM)
-    //
-    EINT;
-    ERTM;
+   //
+   // Enable Global Interrupt (INTM) and realtime interrupt (DBGM)
+   //
+   EINT;
+   ERTM;
 
-    EALLOW;
+   EALLOW;
+
     DMA_startChannel(DMA_CH5_BASE);
 
-    //
-    // IDLE loop. Just sit and loop forever (optional):
-    //
-
-    float frequency = EPWM_TIMER_TBPRD;
-    int ampIdx = 99;
     for(;;)
     {
-        float period = 100e6 / frequency;
-        EPWM_setTimeBasePeriod(EPWM1_BASE, period);
-
-        float* angles = phaseAngles[ampIdx];
-        int i;
-        for (i = 0; i < ANGLES; i++) {
-            float angle = period * angles[i]/(2 * PI);
-            uint16_t angleInt = (uint16_t) angle;
-
-            compareConfigs[i*BURST + 1] = angleInt; // first quarterwave (CMPA)
-            compareConfigs[(2 * ANGLES - i)*BURST + 1] = angleInt; // second quarterwave (CMPA)
-            compareConfigs[(2 * ANGLES + i)*BURST + 3] = angleInt; // third quarterwave (CMPB)
-            compareConfigs[(4 * ANGLES - i)*BURST + 3] = angleInt; // fourth quarterwave (CMPB)
-
-            // fractional part
-            angle = (angle - angleInt) * 256;
-            angleInt = (uint16_t) angle;
-
-            compareConfigs[i*BURST] = angleInt; // first quarterwave (CMPAHR)
-            compareConfigs[(2 * ANGLES - i)*BURST] = angleInt; // second quarterwave (CMPAHR)
-            compareConfigs[(2 * ANGLES + i)*BURST + 2] = angleInt; // third quarterwave (CMPBHR)
-            compareConfigs[(4 * ANGLES - i)*BURST + 2] = angleInt; // fourth quarterwave (CMPBHR)
-        }
+        //
+        // Call the scale factor optimizer lib function SFO()
+        // periodically to track for any change due to temp/voltage.
+        // This function generates MEP_ScaleFactor by running the
+        // MEP calibration module in the HRPWM logic. This scale
+        // factor can be used for all HRPWM channels. The SFO()
+        // function also updates the HRMSTEP register with the
+        // scale factor value.
+        //
+        status = SFO(); // in background, MEP calibration module
+                        // continuously updates MEP_ScaleFactor
     }
 }
 
@@ -253,7 +270,7 @@ void initDMA()
     //
     // DMA CH5
     //
-    DMA_configAddresses(DMA_CH5_BASE, (uint16_t *)(EPWM1_BASE + EPWM_O_CMPA),
+    DMA_configAddresses(DMA_CH5_BASE, (uint16_t *)(EPWM1_BASE + HRPWM_O_TBPRDHR),
                         compareConfigs);
     DMA_configBurst(DMA_CH5_BASE, BURST, 1, 1);
     DMA_configTransfer(DMA_CH5_BASE, TRANSFER, 1, 1-BURST);
@@ -297,7 +314,7 @@ __interrupt void epwm1ISR(void)
     //
     // Un-comment below to check the status of each register after CTR=0
     //
-    // ESTOP0;
+    //ESTOP0;
 
     //
     // Clear INT flag for this timer
@@ -337,19 +354,19 @@ void initEPWM(uint32_t base)
     //
     EPWM_setTimeBaseCounterMode(base, EPWM_COUNTER_MODE_UP);
     EPWM_disablePhaseShiftLoad(base);
-    EPWM_setClockPrescaler(base,
-                           EPWM_CLOCK_DIVIDER_64,
-                           EPWM_HSCLOCK_DIVIDER_1);
 
     //
     // Set up shadowing
     //
-    EPWM_setCounterCompareShadowLoadMode(base,
-                                         EPWM_COUNTER_COMPARE_A,
-                                         EPWM_COMP_LOAD_ON_CNTR_ZERO);
-    EPWM_setCounterCompareShadowLoadMode(base,
-                                         EPWM_COUNTER_COMPARE_B,
-                                         EPWM_COMP_LOAD_ON_CNTR_ZERO);
+    //EPWM_setCounterCompareShadowLoadMode(base,
+    //                                     EPWM_COUNTER_COMPARE_A,
+    //                                     EPWM_COMP_LOAD_ON_CNTR_ZERO);
+    //EPWM_setCounterCompareShadowLoadMode(base,
+    //                                     EPWM_COUNTER_COMPARE_B,
+    //                                     EPWM_COMP_LOAD_ON_CNTR_ZERO);
+
+    EPWM_disableCounterCompareShadowLoadMode(base,  EPWM_COUNTER_COMPARE_A);
+    EPWM_disableCounterCompareShadowLoadMode(base,  EPWM_COUNTER_COMPARE_B);
 
     //
     // Set actions
@@ -368,6 +385,17 @@ void initEPWM(uint32_t base)
 
     EPWM_setActionQualifierAction(base,
                                   EPWM_AQ_OUTPUT_A,
+                                  EPWM_AQ_OUTPUT_LOW,
+                                  EPWM_AQ_OUTPUT_ON_TIMEBASE_PERIOD);
+
+
+    EPWM_setActionQualifierAction(base,
+                                  EPWM_AQ_OUTPUT_B,
+                                  EPWM_AQ_OUTPUT_LOW,
+                                  EPWM_AQ_OUTPUT_ON_TIMEBASE_PERIOD);
+
+    EPWM_setActionQualifierAction(base,
+                                  EPWM_AQ_OUTPUT_A,
                                   EPWM_AQ_OUTPUT_TOGGLE,
                                   EPWM_AQ_OUTPUT_ON_TIMEBASE_UP_CMPA);
     EPWM_setActionQualifierAction(base,
@@ -375,24 +403,41 @@ void initEPWM(uint32_t base)
                                   EPWM_AQ_OUTPUT_TOGGLE,
                                   EPWM_AQ_OUTPUT_ON_TIMEBASE_UP_CMPB);
 
+    //HRPWM_setMEPEdgeSelect(base, HRPWM_CHANNEL_A, HRPWM_MEP_CTRL_FALLING_EDGE);
+    HRPWM_setMEPEdgeSelect(base, HRPWM_CHANNEL_A, HRPWM_MEP_CTRL_RISING_AND_FALLING_EDGE);
+    HRPWM_setMEPControlMode(base, HRPWM_CHANNEL_A, HRPWM_MEP_DUTY_PERIOD_CTRL);
+
+
+    //HRPWM_setMEPEdgeSelect(base, HRPWM_CHANNEL_B, HRPWM_MEP_CTRL_FALLING_EDGE);
+    HRPWM_setMEPEdgeSelect(base, HRPWM_CHANNEL_B, HRPWM_MEP_CTRL_RISING_AND_FALLING_EDGE);
+    HRPWM_setMEPControlMode(base, HRPWM_CHANNEL_B, HRPWM_MEP_DUTY_PERIOD_CTRL);
+
+
+    //
+    // Enable auto-conversion logic.
+    //
+    HRPWM_enableAutoConversion(base);
+    HRPWM_enablePeriodControl(base);
+
 
     //
     // Interrupt where we will change the Compare Values
     // Select INT on Time base counter zero event,
     // Enable INT, generate INT on 1st event
     //
-    EPWM_setInterruptSource(base, EPWM_INT_TBCTR_ZERO);
+    EPWM_setInterruptSource(base, EPWM_INT_TBCTR_U_CMPA);
     EPWM_enableInterrupt(base);
     EPWM_setInterruptEventCount(base, 1U);
 
     EPWM_enableADCTrigger(base, EPWM_SOC_A);
     EPWM_setADCTriggerSource(base,
                              EPWM_SOC_A,
-                             EPWM_SOC_TBCTR_ZERO);
+                             EPWM_SOC_TBCTR_U_CMPA);
     EPWM_setADCTriggerEventPrescale(base,
                                     EPWM_SOC_A,
                                        1);
     EPWM_clearADCTriggerFlag(base,
                              EPWM_SOC_A);
+
 }
 
