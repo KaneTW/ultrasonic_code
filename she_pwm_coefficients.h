@@ -4,6 +4,6 @@
 #define AMPLITUDES 100
 #define ANGLES 5
 
-extern const float phaseAngles[AMPLITUDES][ANGLES];
+extern const float dutyPeriods[AMPLITUDES][ANGLES * 2];
 
 #endif
